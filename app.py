@@ -2,68 +2,40 @@ import os
 import json
 from datetime import datetime, timezone
 from flask import Flask, request, jsonify, render_template_string
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import sqlite3
 
 # === Настройки ===
 WEB_PORT = int(os.getenv("PORT", 5000))
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///co2_devices.db")
+DB_FILE = "co2_devices.db"
 
-USE_POSTGRES = DATABASE_URL.startswith("postgres") or DATABASE_URL.startswith("postgresql")
-if USE_POSTGRES:
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
-# === Инициализация БД ===
+# === Инициализация базы данных (SQLite) ===
 def init_db():
-    if USE_POSTGRES:
-        conn = psycopg2.connect(DATABASE_URL)
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS logs (
-                id SERIAL PRIMARY KEY,
-                device_id TEXT NOT NULL,
-                timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
-                source_ip TEXT NOT NULL,
-                co2 REAL,
-                temp INTEGER,
-                status TEXT
-            )
-        ''')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_device ON logs(device_id);')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON logs(timestamp);')
-        conn.commit()
-        conn.close()
-        print("✅ PostgreSQL инициализирован")
-    else:
-        import sqlite3
-        conn = sqlite3.connect("co2_devices.db")
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                device_id TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                source_ip TEXT NOT NULL,
-                co2 REAL,
-                temp INTEGER,
-                status TEXT
-            )
-        ''')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_device ON logs(device_id);')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON logs(timestamp);')
-        conn.commit()
-        conn.close()
-        print("✅ SQLite инициализирован")
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            device_id TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            source_ip TEXT NOT NULL,
+            co2 REAL,
+            temp INTEGER,
+            status TEXT
+        )
+    ''')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_device ON logs(device_id);')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON logs(timestamp);')
+    conn.commit()
+    conn.close()
+    print("✅ SQLite инициализирован")
 
+# === Универсальное подключение к SQLite ===
 def get_db_connection():
-    if USE_POSTGRES:
-        return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-    else:
-        import sqlite3
-        conn = sqlite3.connect("co2_devices.db")
-        conn.row_factory = sqlite3.Row
-        return conn
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
 
+# === Сохранение данных ===
 def save_to_db(device_id, ip, payload):
     try:
         co2 = float(payload["co2"]) if "co2" in payload and payload["co2"] is not None else None
@@ -78,18 +50,11 @@ def save_to_db(device_id, ip, payload):
 
         conn = get_db_connection()
         cursor = conn.cursor()
-        if USE_POSTGRES:
-            timestamp = datetime.now(timezone.utc)
-            cursor.execute('''
-                INSERT INTO logs (device_id, timestamp, source_ip, co2, temp, status)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            ''', (device_id, timestamp, ip, co2, temp, status))
-        else:
-            timestamp = datetime.utcnow().isoformat() + "Z"
-            cursor.execute('''
-                INSERT INTO logs (device_id, timestamp, source_ip, co2, temp, status)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (device_id, timestamp, ip, co2, temp, status))
+        timestamp = datetime.utcnow().isoformat() + "Z"
+        cursor.execute('''
+            INSERT INTO logs (device_id, timestamp, source_ip, co2, temp, status)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (device_id, timestamp, ip, co2, temp, status))
         conn.commit()
         conn.close()
         print(f"💾 Сохранено: {device_id} | CO2={co2} | Temp={temp} | Status={status}")
@@ -117,22 +82,13 @@ def get_devices():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        if USE_POSTGRES:
-            cursor.execute('''
-                SELECT device_id, MAX(timestamp) as last_seen,
-                       co2, temp, status, source_ip
-                FROM logs
-                GROUP BY device_id, co2, temp, status, source_ip
-                ORDER BY device_id
-            ''')
-        else:
-            cursor.execute('''
-                SELECT device_id, MAX(timestamp) as last_seen,
-                       co2, temp, status, source_ip
-                FROM logs
-                GROUP BY device_id
-                ORDER BY device_id
-            ''')
+        cursor.execute('''
+            SELECT device_id, MAX(timestamp) as last_seen,
+                   co2, temp, status, source_ip
+            FROM logs
+            GROUP BY device_id
+            ORDER BY device_id
+        ''')
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
@@ -144,20 +100,12 @@ def get_device_history(device_id):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        if USE_POSTGRES:
-            cursor.execute('''
-                SELECT * FROM logs
-                WHERE device_id = %s
-                ORDER BY timestamp DESC
-                LIMIT 100
-            ''', (device_id,))
-        else:
-            cursor.execute('''
-                SELECT * FROM logs
-                WHERE device_id = ?
-                ORDER BY timestamp DESC
-                LIMIT 100
-            ''', (device_id,))
+        cursor.execute('''
+            SELECT * FROM logs
+            WHERE device_id = ?
+            ORDER BY timestamp DESC
+            LIMIT 100
+        ''', (device_id,))
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
@@ -169,48 +117,29 @@ def get_statistics():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        if USE_POSTGRES:
-            cursor.execute('SELECT COUNT(DISTINCT device_id) FROM logs')
-            total_devices = cursor.fetchone()['count']
-            cursor.execute('''
-                SELECT COUNT(DISTINCT device_id)
-                FROM logs
-                WHERE timestamp >= NOW() - INTERVAL '10 minutes'
-            ''')
-            active_devices = cursor.fetchone()['count']
-            cursor.execute('''
-                SELECT COUNT(DISTINCT device_id)
-                FROM logs
-                WHERE co2 > 0.09 AND timestamp >= NOW() - INTERVAL '10 minutes'
-            ''')
-            high_co2_alerts = cursor.fetchone()['count']
-            cursor.execute('''
-                SELECT AVG(temp)
-                FROM logs
-                WHERE temp IS NOT NULL AND timestamp >= NOW() - INTERVAL '10 minutes'
-            ''')
-            avg_temp = cursor.fetchone()['avg']
-        else:
-            cursor.execute('SELECT COUNT(DISTINCT device_id) FROM logs')
-            total_devices = cursor.fetchone()[0]
-            cursor.execute('''
-                SELECT COUNT(DISTINCT device_id)
-                FROM logs
-                WHERE timestamp >= datetime('now', '-10 minutes')
-            ''')
-            active_devices = cursor.fetchone()[0]
-            cursor.execute('''
-                SELECT COUNT(DISTINCT device_id)
-                FROM logs
-                WHERE co2 > 0.09 AND timestamp >= datetime('now', '-10 minutes')
-            ''')
-            high_co2_alerts = cursor.fetchone()[0]
-            cursor.execute('''
-                SELECT AVG(temp)
-                FROM logs
-                WHERE temp IS NOT NULL AND timestamp >= datetime('now', '-10 minutes')
-            ''')
-            avg_temp = cursor.fetchone()[0]
+        cursor.execute('SELECT COUNT(DISTINCT device_id) FROM logs')
+        total_devices = cursor.fetchone()[0]
+
+        cursor.execute('''
+            SELECT COUNT(DISTINCT device_id)
+            FROM logs
+            WHERE timestamp >= datetime('now', '-10 minutes')
+        ''')
+        active_devices = cursor.fetchone()[0]
+
+        cursor.execute('''
+            SELECT COUNT(DISTINCT device_id)
+            FROM logs
+            WHERE co2 > 0.09 AND timestamp >= datetime('now', '-10 minutes')
+        ''')
+        high_co2_alerts = cursor.fetchone()[0]
+
+        cursor.execute('''
+            SELECT AVG(temp)
+            FROM logs
+            WHERE temp IS NOT NULL AND timestamp >= datetime('now', '-10 minutes')
+        ''')
+        avg_temp = cursor.fetchone()[0]
         conn.close()
         return {
             'total_devices': total_devices or 0,
@@ -226,33 +155,21 @@ def get_trend_data():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        if USE_POSTGRES:
-            cursor.execute('''
-                SELECT 
-                    TO_CHAR(timestamp, 'HH24:00') as hour,
-                    AVG(co2) as avg_co2,
-                    AVG(temp) as avg_temp
-                FROM logs
-                WHERE timestamp >= NOW() - INTERVAL '24 hours'
-                GROUP BY hour
-                ORDER BY hour
-            ''')
-        else:
-            cursor.execute('''
-                SELECT 
-                    strftime('%H:00', timestamp) as hour,
-                    AVG(co2) as avg_co2,
-                    AVG(temp) as avg_temp
-                FROM logs
-                WHERE timestamp >= datetime('now', '-24 hours')
-                GROUP BY hour
-                ORDER BY hour
-            ''')
+        cursor.execute('''
+            SELECT 
+                strftime('%H:00', timestamp) as hour,
+                AVG(co2) as avg_co2,
+                AVG(temp) as avg_temp
+            FROM logs
+            WHERE timestamp >= datetime('now', '-24 hours')
+            GROUP BY hour
+            ORDER BY hour
+        ''')
         rows = cursor.fetchall()
         conn.close()
-        return [{'hour': row['hour'], 'co2': row['avg_co2'], 'temp': row['avg_temp']} for row in rows]
+        return [{'hour': row[0], 'co2': row[1], 'temp': row[2]} for row in rows]
     except Exception as e:
-        print(f"❌ Ошибка трендов: {e}")
+        print(f"❌ Ошибка получения трендов: {e}")
         return []
 
 @app.route('/')
@@ -263,12 +180,9 @@ def index():
     device_rows = ""
     for d in devices:
         try:
-            if USE_POSTGRES:
-                time_str = d['last_seen'].strftime("%d %b %Y, %H:%M:%S")
-            else:
-                time_str = datetime.fromisoformat(d['last_seen'].replace("Z", "+00:00")).strftime("%d %b %Y, %H:%M:%S")
+            time_str = datetime.fromisoformat(d['last_seen'].replace("Z", "+00:00")).strftime("%d %b %Y, %H:%M:%S")
         except:
-            time_str = str(d['last_seen'])
+            time_str = d['last_seen']
         
         status_class = "status-good"
         if d['status'] == "VENT":
@@ -590,12 +504,9 @@ def device_page(device_id):
     
     latest = history[0]
     try:
-        if USE_POSTGRES:
-            last_seen = latest['timestamp'].strftime("%d %b %Y, %H:%M:%S")
-        else:
-            last_seen = datetime.fromisoformat(latest['timestamp'].replace("Z", "+00:00")).strftime("%d %b %Y, %H:%M:%S")
+        last_seen = datetime.fromisoformat(latest['timestamp'].replace("Z", "+00:00")).strftime("%d %b %Y, %H:%M:%S")
     except:
-        last_seen = str(latest['timestamp'])
+        last_seen = latest['timestamp']
     
     status_class = "status-good"
     if latest['status'] == "VENT":
@@ -613,12 +524,9 @@ def device_page(device_id):
     history_rows = ""
     for r in history:
         try:
-            if USE_POSTGRES:
-                time_str = r['timestamp'].strftime("%H:%M:%S")
-            else:
-                time_str = datetime.fromisoformat(r['timestamp'].replace("Z", "+00:00")).strftime("%H:%M:%S")
+            time_str = datetime.fromisoformat(r['timestamp'].replace("Z", "+00:00")).strftime("%H:%M:%S")
         except:
-            time_str = str(r['timestamp'])
+            time_str = r['timestamp']
         
         status_class_hist = "status-good"
         if r['status'] == "VENT":
@@ -853,8 +761,13 @@ def device_page(device_id):
         @media (max-width: 768px) {{
             .header-content {{ flex-direction: column; text-align: center; gap: 10px; }}
             .device-details {{ flex-direction: column; }}
-            .stats-container {{ grid-template-columns: 1fr; }}
-            table {{ display: block; overflow-x: auto; }}
+            .stats-container {{
+                grid-template-columns: 1fr;
+            }}
+            table {{
+                display: block;
+                overflow-x: auto;
+            }}
         }}
     </style>
 </head>
