@@ -10,30 +10,37 @@ DB_FILE = "co2_devices.db"
 
 # === Инициализация базы данных (SQLite) ===
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            device_id TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            source_ip TEXT NOT NULL,
-            co2 REAL,
-            temp INTEGER,
-            status TEXT
-        )
-    ''')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_device ON logs(device_id);')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON logs(timestamp);')
-    conn.commit()
-    conn.close()
-    print("✅ SQLite инициализирован")
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                source_ip TEXT NOT NULL,
+                co2 REAL,
+                temp INTEGER,
+                status TEXT
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_device ON logs(device_id);')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON logs(timestamp);')
+        conn.commit()
+        conn.close()
+        print("✅ SQLite БД инициализирована")
+    except Exception as e:
+        print(f"❌ ОШИБКА инициализации БД: {e}")
 
 # === Универсальное подключение к SQLite ===
 def get_db_connection():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception as e:
+        print(f"❌ ОШИБКА подключения к БД: {e}")
+        raise
 
 # === Сохранение данных ===
 def save_to_db(device_id, ip, payload):
@@ -57,9 +64,10 @@ def save_to_db(device_id, ip, payload):
         ''', (device_id, timestamp, ip, co2, temp, status))
         conn.commit()
         conn.close()
-        print(f"💾 Сохранено: {device_id} | CO2={co2} | Temp={temp} | Status={status}")
+        print(f"💾 Сохранено: {device_id} | CO2={co2} | Temp={temp} | Status={status} | IP={ip}")
     except Exception as e:
-        print(f"❌ Ошибка сохранения: {e}")
+        print(f"❌ ОШИБКА сохранения в БД: {e}")
+        raise  # Теперь ошибки не проглатываются
 
 # === Flask App ===
 app = Flask(__name__)
@@ -69,14 +77,28 @@ def receive_data():
     try:
         payload = request.get_json()
         if not payload:
+            print("❌ Получен пустой или невалидный JSON")
             return jsonify({"error": "Invalid JSON"}), 400
         ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
         device_id = payload.get("device", ip)
         save_to_db(device_id, ip, payload)
         return jsonify({"status": "ok"}), 200
     except Exception as e:
-        print(f"❌ API error: {e}")
+        print(f"❌ КРИТИЧЕСКАЯ ОШИБКА в /api/log: {e}")
         return jsonify({"error": "Internal error"}), 500
+
+# === Эндпоинт для отладки: просмотр последних записей ===
+@app.route('/debug')
+def debug_logs():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM logs ORDER BY timestamp DESC LIMIT 10')
+        rows = cursor.fetchall()
+        conn.close()
+        return jsonify([dict(row) for row in rows])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 def get_devices():
     try:
@@ -93,7 +115,7 @@ def get_devices():
         conn.close()
         return [dict(row) for row in rows]
     except Exception as e:
-        print(f"❌ Ошибка чтения устройств: {e}")
+        print(f"❌ ОШИБКА get_devices(): {e}")
         return []
 
 def get_device_history(device_id):
@@ -110,7 +132,7 @@ def get_device_history(device_id):
         conn.close()
         return [dict(row) for row in rows]
     except Exception as e:
-        print(f"❌ Ошибка истории: {e}")
+        print(f"❌ ОШИБКА get_device_history(): {e}")
         return []
 
 def get_statistics():
@@ -118,21 +140,21 @@ def get_statistics():
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT COUNT(DISTINCT device_id) FROM logs')
-        total_devices = cursor.fetchone()[0]
+        total_devices = cursor.fetchone()[0] or 0
 
         cursor.execute('''
             SELECT COUNT(DISTINCT device_id)
             FROM logs
             WHERE timestamp >= datetime('now', '-10 minutes')
         ''')
-        active_devices = cursor.fetchone()[0]
+        active_devices = cursor.fetchone()[0] or 0
 
         cursor.execute('''
             SELECT COUNT(DISTINCT device_id)
             FROM logs
             WHERE co2 > 0.09 AND timestamp >= datetime('now', '-10 minutes')
         ''')
-        high_co2_alerts = cursor.fetchone()[0]
+        high_co2_alerts = cursor.fetchone()[0] or 0
 
         cursor.execute('''
             SELECT AVG(temp)
@@ -142,13 +164,13 @@ def get_statistics():
         avg_temp = cursor.fetchone()[0]
         conn.close()
         return {
-            'total_devices': total_devices or 0,
-            'active_devices': active_devices or 0,
-            'high_co2_alerts': high_co2_alerts or 0,
+            'total_devices': total_devices,
+            'active_devices': active_devices,
+            'high_co2_alerts': high_co2_alerts,
             'avg_temp': round(avg_temp, 1) if avg_temp else 0
         }
     except Exception as e:
-        print(f"❌ Ошибка статистики: {e}")
+        print(f"❌ ОШИБКА get_statistics(): {e}")
         return {'total_devices': 0, 'active_devices': 0, 'high_co2_alerts': 0, 'avg_temp': 0}
 
 def get_trend_data():
@@ -169,9 +191,10 @@ def get_trend_data():
         conn.close()
         return [{'hour': row[0], 'co2': row[1], 'temp': row[2]} for row in rows]
     except Exception as e:
-        print(f"❌ Ошибка получения трендов: {e}")
+        print(f"❌ ОШИБКА get_trend_data(): {e}")
         return []
 
+# === Основные маршруты ===
 @app.route('/')
 def index():
     devices = get_devices()
@@ -759,8 +782,14 @@ def device_page(device_id):
             font-size: 0.9rem;
         }}
         @media (max-width: 768px) {{
-            .header-content {{ flex-direction: column; text-align: center; gap: 10px; }}
-            .device-details {{ flex-direction: column; }}
+            .header-content {{
+                flex-direction: column;
+                text-align: center;
+                gap: 10px;
+            }}
+            .device-details {{
+                flex-direction: column;
+            }}
             .stats-container {{
                 grid-template-columns: 1fr;
             }}
@@ -849,6 +878,8 @@ def device_page(device_id):
 </html>
 '''
 
+# === ИНИЦИАЛИЗАЦИЯ БД ПРИ СТАРТУ ===
+init_db()
+
 if __name__ == '__main__':
-    init_db()
     app.run(host='0.0.0.0', port=WEB_PORT, debug=False)
