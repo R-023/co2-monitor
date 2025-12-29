@@ -2,7 +2,6 @@ import os
 import json
 from datetime import datetime
 from flask import Flask, request, jsonify
-
 import sqlite3
 
 # === Настройки ===
@@ -154,7 +153,7 @@ def get_trend_data():
     conn.close()
     return [{'hour': row[0], 'co2': row[1], 'temp': row[2]} for row in rows]
 
-# === Основной маршрут ===
+# === Главная страница ===
 @app.route('/')
 def index():
     devices = get_devices()
@@ -191,7 +190,7 @@ def index():
         </tr>
         '''
 
-    # Генерация трендов
+    # Генерация трендов без ошибок
     trend_data = get_trend_data()
     co2_chart_bars = "".join([
         f'''
@@ -305,7 +304,7 @@ def index():
     </html>
     '''
 
-# === Страница цифрового дисплея ===
+# === Страница цифрового дисплея (только CO2 + TEMP) ===
 @app.route('/device/<device_id>/dashboard')
 def device_dashboard(device_id):
     history = get_device_history(device_id)
@@ -320,16 +319,20 @@ def device_dashboard(device_id):
     
     co2_ppm = int(latest['co2'] * 10000) if latest['co2'] is not None else 0
     
+    # Максимальное значение шкалы — 2400 PPM
+    max_co2 = 2400
+    angle = min(180, int((co2_ppm / max_co2) * 180))  # 0-2400 PPM → 0-180°
+    
+    # Цвет стрелки
     if co2_ppm <= 800:
-        arc_color = "#4CAF50"
+        needle_color = "#4CAF50"
     elif co2_ppm <= 1200:
-        arc_color = "#FF9800"
+        needle_color = "#FF9800"
     else:
-        arc_color = "#F44336"
+        needle_color = "#F44336"
     
     temp = latest['temp'] if latest['temp'] is not None else "--"
-    humidity = "62%"
-    
+
     return f'''
     <!DOCTYPE html>
     <html lang="en">
@@ -338,37 +341,145 @@ def device_dashboard(device_id):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>{device_id} Dashboard</title>
         <style>
-            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f0f0f; margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; color: white; }}
-            .device-panel {{ width: 320px; background: #1a1a1a; border-radius: 20px; padding: 25px; box-shadow: 0 10px 30px rgba(0,0,0,0.7); position: relative; overflow: hidden; }}
-            .border-glow {{ position: absolute; top: 0; left: 0; right: 0; bottom: 0; border: 3px solid {arc_color}; border-radius: 20px; z-index: -1; filter: blur(2px); opacity: 0.7; }}
-            .header {{ text-align: center; font-size: 1.1rem; margin-bottom: 20px; color: #aaa; }}
-            .co2-display {{ text-align: center; margin: 20px 0; }}
-            .co2-value {{ font-size: 3.5rem; font-weight: bold; font-family: 'Courier New', monospace; color: white; letter-spacing: 2px; }}
-            .co2-unit {{ font-size: 1rem; color: #888; margin-top: 5px; }}
-            .arc-container {{ position: relative; width: 100%; height: 100px; margin: 25px 0; }}
-            .arc {{ position: absolute; width: 100%; height: 100%; border: 8px solid transparent; border-top: 8px solid {arc_color}; border-radius: 50%; transform: rotate(-90deg); }}
-            .arc::before {{ content: ''; position: absolute; top: 50%; left: 50%; width: 82%; height: 82%; background: #1a1a1a; border-radius: 50%; transform: translate(-50%, -50%); }}
-            .info-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 25px; }}
-            .info-item {{ background: rgba(255,255,255,0.08); border-radius: 12px; padding: 12px; text-align: center; }}
-            .info-label {{ font-size: 0.85rem; color: #aaa; margin-bottom: 4px; }}
-            .info-value {{ font-size: 1.4rem; font-weight: bold; font-family: 'Courier New', monospace; }}
-            .last-updated {{ text-align: center; font-size: 0.8rem; color: #666; margin-top: 15px; }}
+            body {{
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: #0f0f0f;
+                margin: 0;
+                padding: 0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 100vh;
+                color: white;
+            }}
+            .device-panel {{
+                width: 320px;
+                background: #1a1a1a;
+                border-radius: 20px;
+                padding: 25px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+                position: relative;
+                overflow: hidden;
+            }}
+            .header {{
+                text-align: center;
+                font-size: 1.1rem;
+                margin-bottom: 20px;
+                color: #aaa;
+            }}
+            .co2-display {{
+                text-align: center;
+                margin: 15px 0;
+            }}
+            .co2-label {{
+                font-size: 1.3rem;
+                color: #fff;
+                margin-bottom: 5px;
+                font-weight: bold;
+            }}
+            .co2-value {{
+                font-size: 3.5rem;
+                font-weight: bold;
+                font-family: 'Courier New', monospace;
+                color: white;
+                letter-spacing: 2px;
+                margin: 10px 0;
+            }}
+            .co2-unit {{
+                font-size: 1rem;
+                color: #888;
+                margin-top: 5px;
+            }}
+            .gauge {{
+                width: 100%;
+                height: 160px;
+                position: relative;
+                margin: 20px 0;
+            }}
+            .gauge-bg {{
+                position: absolute;
+                width: 100%;
+                height: 100%;
+                border-radius: 50%;
+                background: #222;
+                z-index: 1;
+            }}
+            .scale {{
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                border-radius: 50%;
+                background: conic-gradient(
+                    #4CAF50 0% 33.33%,
+                    #FF9800 33.33% 66.66%,
+                    #F44336 66.66% 100%
+                );
+                clip-path: polygon(50% 50%, 0 0, 100% 0, 100% 100%, 0 100%);
+                transform: rotate(-90deg);
+                z-index: 2;
+            }}
+            .needle {{
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                width: 4px;
+                height: 70px;
+                background: {needle_color};
+                transform-origin: 50% 100%;
+                transform: translate(-50%, -100%) rotate({angle}deg);
+                z-index: 3;
+                transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            }}
+            .info-grid {{
+                display: grid;
+                grid-template-columns: 1fr;
+                gap: 12px;
+                margin-top: 25px;
+            }}
+            .info-item {{
+                background: rgba(255,255,255,0.08);
+                border-radius: 12px;
+                padding: 12px;
+                text-align: center;
+            }}
+            .info-label {{
+                font-size: 0.85rem;
+                color: #aaa;
+                margin-bottom: 4px;
+            }}
+            .info-value {{
+                font-size: 1.4rem;
+                font-weight: bold;
+                font-family: 'Courier New', monospace;
+            }}
+            .last-updated {{
+                text-align: center;
+                font-size: 0.8rem;
+                color: #666;
+                margin-top: 15px;
+            }}
         </style>
     </head>
     <body>
         <div class="device-panel">
-            <div class="border-glow"></div>
             <div class="header">CO₂ MONITOR</div>
             <div class="co2-display">
+                <div class="co2-label">CO₂</div>
                 <div class="co2-value">{co2_ppm:04d}</div>
                 <div class="co2-unit">PPM</div>
             </div>
-            <div class="arc-container">
-                <div class="arc"></div>
+            <div class="gauge">
+                <div class="gauge-bg"></div>
+                <div class="scale"></div>
+                <div class="needle"></div>
             </div>
             <div class="info-grid">
-                <div class="info-item"><div class="info-label">TEMP</div><div class="info-value">{temp}°C</div></div>
-                <div class="info-item"><div class="info-label">HUMI</div><div class="info-value">{humidity}</div></div>
+                <div class="info-item">
+                    <div class="info-label">TEMP</div>
+                    <div class="info-value">{temp}°C</div>
+                </div>
             </div>
             <div class="last-updated">Last seen: {last_seen}</div>
         </div>
@@ -376,6 +487,7 @@ def device_dashboard(device_id):
     </html>
     '''
 
+# === ИНИЦИАЛИЗАЦИЯ ===
 init_db()
 
 if __name__ == '__main__':
