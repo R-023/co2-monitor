@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string
 import sqlite3
-from dashboard import device_dashboard_page  # импорт из отдельного файла
+from dashboard import device_dashboard_page  # ← Импорт из отдельного файла
 
 # === Настройки ===
 WEB_PORT = int(os.getenv("PORT", 5000))
@@ -211,11 +211,98 @@ def index():
     ])
 
     return f'''
-    <!DOCTYPE html>
-    ...
-    <!-- остальной HTML без изменений -->
-    '''
-# (HTML-код оставьте как в предыдущей версии)
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CO2 Monitoring Dashboard</title>
+    <style>
+        :root {{ --primary: #4CAF50; --primary-dark: #388E3C; --secondary: #2196F3; --danger: #F44336; --warning: #FF9800; --light: #f9f9f9; --dark: #333; --gray: #f5f5f5; --border: #ddd; }}
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f7fa; color: #333; line-height: 1.6; }}
+        .container {{ max-width: 1200px; margin: 0 auto; padding: 20px; }}
+        header {{ background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: white; padding: 20px 0; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 30px; }}
+        .header-content {{ display: flex; justify-content: space-between; align-items: center; padding: 0 20px; }}
+        .header-title {{ font-size: 2rem; font-weight: 600; }}
+        .stats-container {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px; }}
+        .stat-card {{ background: white; border-radius: 10px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); transition: transform 0.2s, box-shadow 0.2s; }}
+        .stat-card:hover {{ transform: translateY(-5px); box-shadow: 0 6px 12px rgba(0,0,0,0.1); }}
+        .stat-title {{ font-size: 0.9rem; color: #666; margin-bottom: 10px; }}
+        .stat-value {{ font-size: 2rem; font-weight: 700; color: var(--primary); }}
+        .stat-value.danger {{ color: var(--danger); }}
+        .table-container {{ background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 30px; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        th {{ background-color: var(--primary); color: white; text-align: left; padding: 15px; font-weight: 600; }}
+        td {{ padding: 12px 15px; border-bottom: 1px solid var(--border); }}
+        tr:hover {{ background-color: var(--gray); }}
+        .status-good {{ color: var(--primary-dark); font-weight: bold; }}
+        .status-vent {{ color: var(--danger); font-weight: bold; }}
+        .status-warning {{ color: var(--warning); font-weight: bold; }}
+        .device-id {{ font-weight: 600; color: var(--secondary); }}
+        .timestamp {{ font-size: 0.9em; color: #666; }}
+        .co2-value {{ font-weight: 600; }}
+        .co2-high {{ color: var(--danger); }}
+        .co2-medium {{ color: var(--warning); }}
+        .co2-normal {{ color: var(--primary-dark); }}
+        .temp-value {{ font-weight: 600; }}
+        .chart-container {{ background: white; border-radius: 10px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 30px; }}
+        .chart-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }}
+        .chart-title {{ font-size: 1.2rem; font-weight: 600; }}
+        .chart {{ height: 300px; display: flex; align-items: flex-end; gap: 5px; padding: 20px 0; }}
+        .bar {{ flex: 1; border-radius: 4px 4px 0 0; position: relative; min-width: 20px; }}
+        .bar-label {{ position: absolute; bottom: -25px; left: 0; right: 0; text-align: center; font-size: 0.8rem; color: #666; }}
+        .bar-value {{ position: absolute; top: -25px; left: 0; right: 0; text-align: center; font-size: 0.8rem; font-weight: 600; }}
+        .co2-bar {{ background: var(--primary); }}
+        .temp-bar {{ background: var(--secondary); }}
+        @media (max-width: 768px) {{
+            .header-content {{ flex-direction: column; text-align: center; gap: 10px; }}
+            .stats-container {{ grid-template-columns: 1fr; }}
+            table {{ display: block; overflow-x: auto; }}
+        }}
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <h1 class="header-title">📊 CO2 Monitoring Dashboard</h1>
+            <div>Last updated: <span id="current-time"></span></div>
+        </div>
+    </header>
+    <div class="container">
+        <div class="stats-container">
+            <div class="stat-card"><div class="stat-title">Total Devices</div><div class="stat-value">{stats['total_devices']}</div></div>
+            <div class="stat-card"><div class="stat-title">Active Devices</div><div class="stat-value">{stats['active_devices']}</div></div>
+            <div class="stat-card"><div class="stat-title">High CO2 Alerts</div><div class="stat-value danger">{stats['high_co2_alerts']}</div></div>
+            <div class="stat-card"><div class="stat-title">Avg Temperature</div><div class="stat-value">{stats['avg_temp']}°C</div></div>
+        </div>
+        <div class="table-container">
+            <table><thead><tr><th>Device ID</th><th>Last Seen</th><th>CO2 (% vol)</th><th>Temp (°C)</th><th>Status</th><th>IP Address</th></tr></thead><tbody>{device_rows or '<tr><td colspan="6" style="text-align:center">No data available</td></tr>'}</tbody></table>
+        </div>
+        <div class="chart-container">
+            <div class="chart-header"><h2 class="chart-title">CO2 Levels Trend (Last 24 Hours)</h2></div>
+            <div class="chart">{co2_chart_bars or '<div style="text-align:center; width:100%;">No trend data available</div>'}</div>
+        </div>
+        <div class="chart-container">
+            <div class="chart-header"><h2 class="chart-title">Temperature Trend (Last 24 Hours)</h2></div>
+            <div class="chart">{temp_chart_bars or '<div style="text-align:center; width:100%;">No trend data available</div>'}</div>
+        </div>
+    </div>
+    <script>
+        function updateCurrentTime() {{
+            const now = new Date();
+            document.getElementById('current-time').textContent = now.toLocaleString('en-US', {{
+                year: 'numeric', month: 'short', day: 'numeric',
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
+            }});
+        }}
+        updateCurrentTime();
+        setInterval(updateCurrentTime, 1000);
+        setInterval(() => location.reload(), 30000);
+    </script>
+</body>
+</html>
+'''
 
 # === Маршрут для дашборда устройства ===
 @app.route('/device/<device_id>/dashboard')
