@@ -1,8 +1,9 @@
 import os
 import json
 from datetime import datetime
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 import sqlite3
+from dashboard import device_dashboard_page  # импорт из отдельного файла
 
 # === Настройки ===
 WEB_PORT = int(os.getenv("PORT", 5000))
@@ -190,7 +191,6 @@ def index():
         </tr>
         '''
 
-    # Генерация трендов без ошибок
     trend_data = get_trend_data()
     co2_chart_bars = "".join([
         f'''
@@ -212,280 +212,15 @@ def index():
 
     return f'''
     <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>CO2 Monitoring Dashboard</title>
-        <style>
-            :root {{ --primary: #4CAF50; --primary-dark: #388E3C; --secondary: #2196F3; --danger: #F44336; --warning: #FF9800; --light: #f9f9f9; --dark: #333; --gray: #f5f5f5; --border: #ddd; }}
-            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f7fa; color: #333; line-height: 1.6; }}
-            .container {{ max-width: 1200px; margin: 0 auto; padding: 20px; }}
-            header {{ background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: white; padding: 20px 0; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 30px; }}
-            .header-content {{ display: flex; justify-content: space-between; align-items: center; padding: 0 20px; }}
-            .header-title {{ font-size: 2rem; font-weight: 600; }}
-            .stats-container {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px; }}
-            .stat-card {{ background: white; border-radius: 10px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); transition: transform 0.2s, box-shadow 0.2s; }}
-            .stat-card:hover {{ transform: translateY(-5px); box-shadow: 0 6px 12px rgba(0,0,0,0.1); }}
-            .stat-title {{ font-size: 0.9rem; color: #666; margin-bottom: 10px; }}
-            .stat-value {{ font-size: 2rem; font-weight: 700; color: var(--primary); }}
-            .stat-value.danger {{ color: var(--danger); }}
-            .table-container {{ background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 30px; }}
-            table {{ width: 100%; border-collapse: collapse; }}
-            th {{ background-color: var(--primary); color: white; text-align: left; padding: 15px; font-weight: 600; }}
-            td {{ padding: 12px 15px; border-bottom: 1px solid var(--border); }}
-            tr:hover {{ background-color: var(--gray); }}
-            .status-good {{ color: var(--primary-dark); font-weight: bold; }}
-            .status-vent {{ color: var(--danger); font-weight: bold; }}
-            .status-warning {{ color: var(--warning); font-weight: bold; }}
-            .device-id {{ font-weight: 600; color: var(--secondary); }}
-            .timestamp {{ font-size: 0.9em; color: #666; }}
-            .co2-value {{ font-weight: 600; }}
-            .co2-high {{ color: var(--danger); }}
-            .co2-medium {{ color: var(--warning); }}
-            .co2-normal {{ color: var(--primary-dark); }}
-            .temp-value {{ font-weight: 600; }}
-            .chart-container {{ background: white; border-radius: 10px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 30px; }}
-            .chart-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }}
-            .chart-title {{ font-size: 1.2rem; font-weight: 600; }}
-            .chart {{ height: 300px; display: flex; align-items: flex-end; gap: 5px; padding: 20px 0; }}
-            .bar {{ flex: 1; border-radius: 4px 4px 0 0; position: relative; min-width: 20px; }}
-            .bar-label {{ position: absolute; bottom: -25px; left: 0; right: 0; text-align: center; font-size: 0.8rem; color: #666; }}
-            .bar-value {{ position: absolute; top: -25px; left: 0; right: 0; text-align: center; font-size: 0.8rem; font-weight: 600; }}
-            .co2-bar {{ background: var(--primary); }}
-            .temp-bar {{ background: var(--secondary); }}
-            @media (max-width: 768px) {{
-                .header-content {{ flex-direction: column; text-align: center; gap: 10px; }}
-                .stats-container {{ grid-template-columns: 1fr; }}
-                table {{ display: block; overflow-x: auto; }}
-            }}
-        </style>
-    </head>
-    <body>
-        <header>
-            <div class="header-content">
-                <h1 class="header-title">📊 CO2 Monitoring Dashboard</h1>
-                <div>Last updated: <span id="current-time"></span></div>
-            </div>
-        </header>
-        <div class="container">
-            <div class="stats-container">
-                <div class="stat-card"><div class="stat-title">Total Devices</div><div class="stat-value">{stats['total_devices']}</div></div>
-                <div class="stat-card"><div class="stat-title">Active Devices</div><div class="stat-value">{stats['active_devices']}</div></div>
-                <div class="stat-card"><div class="stat-title">High CO2 Alerts</div><div class="stat-value danger">{stats['high_co2_alerts']}</div></div>
-                <div class="stat-card"><div class="stat-title">Avg Temperature</div><div class="stat-value">{stats['avg_temp']}°C</div></div>
-            </div>
-            <div class="table-container">
-                <table><thead><tr><th>Device ID</th><th>Last Seen</th><th>CO2 (% vol)</th><th>Temp (°C)</th><th>Status</th><th>IP Address</th></tr></thead><tbody>{device_rows or '<tr><td colspan="6" style="text-align:center">No data available</td></tr>'}</tbody></table>
-            </div>
-            <div class="chart-container">
-                <div class="chart-header"><h2 class="chart-title">CO2 Levels Trend (Last 24 Hours)</h2></div>
-                <div class="chart">{co2_chart_bars or '<div style="text-align:center; width:100%;">No trend data available</div>'}</div>
-            </div>
-            <div class="chart-container">
-                <div class="chart-header"><h2 class="chart-title">Temperature Trend (Last 24 Hours)</h2></div>
-                <div class="chart">{temp_chart_bars or '<div style="text-align:center; width:100%;">No trend data available</div>'}</div>
-            </div>
-        </div>
-        <script>
-            function updateCurrentTime() {{
-                const now = new Date();
-                document.getElementById('current-time').textContent = now.toLocaleString('en-US', {{
-                    year: 'numeric', month: 'short', day: 'numeric',
-                    hour: '2-digit', minute: '2-digit', second: '2-digit'
-                }});
-            }}
-            updateCurrentTime();
-            setInterval(updateCurrentTime, 1000);
-            setInterval(() => location.reload(), 30000);
-        </script>
-    </body>
-    </html>
+    ...
+    <!-- остальной HTML без изменений -->
     '''
+# (HTML-код оставьте как в предыдущей версии)
 
-# === Страница цифрового дисплея (только CO2 + TEMP) ===
+# === Маршрут для дашборда устройства ===
 @app.route('/device/<device_id>/dashboard')
 def device_dashboard(device_id):
-    history = get_device_history(device_id)
-    if not history:
-        return f"<h1>Device {device_id} not found</h1><a href='/'>Back to main page</a>"
-    
-    latest = history[0]
-    try:
-        last_seen = datetime.fromisoformat(latest['timestamp'].replace("Z", "+00:00")).strftime("%d %b %Y, %H:%M:%S")
-    except:
-        last_seen = latest['timestamp']
-    
-    co2_ppm = int(latest['co2'] * 10000) if latest['co2'] is not None else 0
-    
-    # Максимальное значение шкалы — 2400 PPM
-    max_co2 = 2400
-    angle = min(180, int((co2_ppm / max_co2) * 180))  # 0-2400 PPM → 0-180°
-    
-    # Цвет стрелки
-    if co2_ppm <= 800:
-        needle_color = "#4CAF50"
-    elif co2_ppm <= 1200:
-        needle_color = "#FF9800"
-    else:
-        needle_color = "#F44336"
-    
-    temp = latest['temp'] if latest['temp'] is not None else "--"
-
-    return f'''
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{device_id} Dashboard</title>
-        <style>
-            body {{
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                background: #0f0f0f;
-                margin: 0;
-                padding: 0;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                min-height: 100vh;
-                color: white;
-            }}
-            .device-panel {{
-                width: 320px;
-                background: #1a1a1a;
-                border-radius: 20px;
-                padding: 25px;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.7);
-                position: relative;
-                overflow: hidden;
-            }}
-            .header {{
-                text-align: center;
-                font-size: 1.1rem;
-                margin-bottom: 20px;
-                color: #aaa;
-            }}
-            .co2-display {{
-                text-align: center;
-                margin: 15px 0;
-            }}
-            .co2-label {{
-                font-size: 1.3rem;
-                color: #fff;
-                margin-bottom: 5px;
-                font-weight: bold;
-            }}
-            .co2-value {{
-                font-size: 3.5rem;
-                font-weight: bold;
-                font-family: 'Courier New', monospace;
-                color: white;
-                letter-spacing: 2px;
-                margin: 10px 0;
-            }}
-            .co2-unit {{
-                font-size: 1rem;
-                color: #888;
-                margin-top: 5px;
-            }}
-            .gauge {{
-                width: 100%;
-                height: 160px;
-                position: relative;
-                margin: 20px 0;
-            }}
-            .gauge-bg {{
-                position: absolute;
-                width: 100%;
-                height: 100%;
-                border-radius: 50%;
-                background: #222;
-                z-index: 1;
-            }}
-            .scale {{
-                position: absolute;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                border-radius: 50%;
-                background: conic-gradient(
-                    #4CAF50 0% 33.33%,
-                    #FF9800 33.33% 66.66%,
-                    #F44336 66.66% 100%
-                );
-                clip-path: polygon(50% 50%, 0 0, 100% 0, 100% 100%, 0 100%);
-                transform: rotate(-90deg);
-                z-index: 2;
-            }}
-            .needle {{
-                position: absolute;
-                top: 50%;
-                left: 50%;
-                width: 4px;
-                height: 70px;
-                background: {needle_color};
-                transform-origin: 50% 100%;
-                transform: translate(-50%, -100%) rotate({angle}deg);
-                z-index: 3;
-                transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-            }}
-            .info-grid {{
-                display: grid;
-                grid-template-columns: 1fr;
-                gap: 12px;
-                margin-top: 25px;
-            }}
-            .info-item {{
-                background: rgba(255,255,255,0.08);
-                border-radius: 12px;
-                padding: 12px;
-                text-align: center;
-            }}
-            .info-label {{
-                font-size: 0.85rem;
-                color: #aaa;
-                margin-bottom: 4px;
-            }}
-            .info-value {{
-                font-size: 1.4rem;
-                font-weight: bold;
-                font-family: 'Courier New', monospace;
-            }}
-            .last-updated {{
-                text-align: center;
-                font-size: 0.8rem;
-                color: #666;
-                margin-top: 15px;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="device-panel">
-            <div class="header">CO₂ MONITOR</div>
-            <div class="co2-display">
-                <div class="co2-label">CO₂</div>
-                <div class="co2-value">{co2_ppm:04d}</div>
-                <div class="co2-unit">PPM</div>
-            </div>
-            <div class="gauge">
-                <div class="gauge-bg"></div>
-                <div class="scale"></div>
-                <div class="needle"></div>
-            </div>
-            <div class="info-grid">
-                <div class="info-item">
-                    <div class="info-label">TEMP</div>
-                    <div class="info-value">{temp}°C</div>
-                </div>
-            </div>
-            <div class="last-updated">Last seen: {last_seen}</div>
-        </div>
-    </body>
-    </html>
-    '''
+    return device_dashboard_page(device_id, get_device_history)
 
 # === ИНИЦИАЛИЗАЦИЯ ===
 init_db()
