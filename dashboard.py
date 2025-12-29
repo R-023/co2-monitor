@@ -15,12 +15,12 @@ def device_dashboard_page(device_id, get_history_func):
         time_str = "00:00"
         date_str = "Jan 01"
     
-    # CO2 в PPM (ограничено 100–1200 для шкалы)
+    # CO2 в PPM (ограничено 0–2000)
     co2_ppm = int(latest['co2'] * 10000) if latest['co2'] is not None else 400
-    co2_ppm = max(100, min(1200, co2_ppm))  # ограничиваем диапазон
+    co2_ppm = max(0, min(2000, co2_ppm))  # ограничиваем диапазон
     
-    # Угол для стрелки: 100 → 0°, 1200 → 360°
-    angle = ((co2_ppm - 100) / (1200 - 100)) * 360
+    # Угол для стрелки: 0 → 0°, 2000 → 360°
+    angle = (co2_ppm / 2000) * 360
     
     # Определяем цвет зоны
     if co2_ppm <= 800:
@@ -44,7 +44,7 @@ def device_dashboard_page(device_id, get_history_func):
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CO₂ Monitor - {device_id}</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Montserrat&family=Roboto:wght@100;300;400;500;700;900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@100;300;400;500;700;900&display=swap');
         * {{
             margin: 0;
             padding: 0;
@@ -264,18 +264,18 @@ def device_dashboard_page(device_id, get_history_func):
 <body>
     <div class="container">
         <div class="gauge">
-            <label style="--i: 1"><span>100</span></label>
-            <label style="--i: 2"><span>200</span></label>
-            <label style="--i: 3"><span>300</span></label>
-            <label style="--i: 4"><span>400</span></label>
-            <label style="--i: 5"><span>500</span></label>
-            <label style="--i: 6"><span>600</span></label>
-            <label style="--i: 7"><span>700</span></label>
-            <label style="--i: 8"><span>800</span></label>
-            <label style="--i: 9"><span>900</span></label>
-            <label style="--i: 10"><span>1000</span></label>
-            <label style="--i: 11"><span>1100</span></label>
-            <label style="--i: 12"><span>1200</span></label>
+            <!-- Метки от 0 до 2000 с шагом 200 -->
+            <label style="--i: 0"><span>0</span></label>
+            <label style="--i: 1"><span>200</span></label>
+            <label style="--i: 2"><span>400</span></label>
+            <label style="--i: 3"><span>600</span></label>
+            <label style="--i: 4"><span>800</span></label>
+            <label style="--i: 5"><span>1000</span></label>
+            <label style="--i: 6"><span>1200</span></label>
+            <label style="--i: 7"><span>1400</span></label>
+            <label style="--i: 8"><span>1600</span></label>
+            <label style="--i: 9"><span>1800</span></label>
+            <label style="--i: 10"><span>2000</span></label>
             
             <div class="zone-indicator"></div>
             <div class="indicators">
